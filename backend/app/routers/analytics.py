@@ -6,9 +6,14 @@ parameter to filter results by lab (e.g., "lab-01").
 """
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import case, func
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import get_session
+from app.models.interaction import InteractionLog
+from app.models.item import ItemRecord
+from app.models.learner import Learner
 
 router = APIRouter()
 
@@ -21,7 +26,7 @@ async def get_scores(
     """Score distribution histogram for a given lab.
 
     TODO: Implement this endpoint.
-    - Find the lab item by matching title (e.g. "lab-04" → title contains "Lab 04")
+    - Find the lab item by matching title (e.g., "lab-04" → title contains "Lab 04")
     - Find all tasks that belong to this lab (parent_id = lab.id)
     - Query interactions for these items that have a score
     - Group scores into buckets: "0-25", "26-50", "51-75", "76-100"
@@ -30,7 +35,72 @@ async def get_scores(
       [{"bucket": "0-25", "count": 12}, {"bucket": "26-50", "count": 8}, ...]
     - Always return all four buckets, even if count is 0
     """
-    raise NotImplementedError
+    # Parse lab-04 -> "Lab 04"
+    lab_num = lab.replace("lab-", "")
+    lab_title_pattern = f"Lab {lab_num}"
+
+    # Find the lab item
+    lab_stmt = select(ItemRecord).where(
+        ItemRecord.type == "lab",
+        ItemRecord.title.like(f"%{lab_title_pattern}%"),
+    )
+    lab_result = await session.exec(lab_stmt)
+    lab_item = lab_result.first()
+
+    if not lab_item:
+        return [
+            {"bucket": "0-25", "count": 0},
+            {"bucket": "26-50", "count": 0},
+            {"bucket": "51-75", "count": 0},
+            {"bucket": "76-100", "count": 0},
+        ]
+
+    # Find all task items for this lab
+    task_stmt = select(ItemRecord.id).where(
+        ItemRecord.parent_id == lab_item.id,
+        ItemRecord.type == "task",
+    )
+    task_result = await session.exec(task_stmt)
+    task_ids = [row for row in task_result]
+
+    if not task_ids:
+        return [
+            {"bucket": "0-25", "count": 0},
+            {"bucket": "26-50", "count": 0},
+            {"bucket": "51-75", "count": 0},
+            {"bucket": "76-100", "count": 0},
+        ]
+
+    # Query interactions with score bucket
+    score_bucket = case(
+        (InteractionLog.score <= 25, "0-25"),
+        (InteractionLog.score <= 50, "26-50"),
+        (InteractionLog.score <= 75, "51-75"),
+        else_="76-100",
+    ).label("bucket")
+
+    stmt = select(
+        score_bucket,
+        func.count(InteractionLog.id).label("count"),
+    ).where(
+        InteractionLog.item_id.in_(task_ids),
+        InteractionLog.score.isnot(None),
+    ).group_by(score_bucket)
+
+    result = await session.exec(stmt)
+    rows = result.all()
+
+    # Build result with all buckets
+    bucket_counts = {"0-25": 0, "26-50": 0, "51-75": 0, "76-100": 0}
+    for row in rows:
+        bucket_counts[row.bucket] = row.count
+
+    return [
+        {"bucket": "0-25", "count": bucket_counts["0-25"]},
+        {"bucket": "26-50", "count": bucket_counts["26-50"]},
+        {"bucket": "51-75", "count": bucket_counts["51-75"]},
+        {"bucket": "76-100", "count": bucket_counts["76-100"]},
+    ]
 
 
 @router.get("/pass-rates")
@@ -49,7 +119,52 @@ async def get_pass_rates(
       [{"task": "Repository Setup", "avg_score": 92.3, "attempts": 150}, ...]
     - Order by task title
     """
-    raise NotImplementedError
+    # Parse lab-04 -> "Lab 04"
+    lab_num = lab.replace("lab-", "")
+    lab_title_pattern = f"Lab {lab_num}"
+
+    # Find the lab item
+    lab_stmt = select(ItemRecord).where(
+        ItemRecord.type == "lab",
+        ItemRecord.title.like(f"%{lab_title_pattern}%"),
+    )
+    lab_result = await session.exec(lab_stmt)
+    lab_item = lab_result.first()
+
+    if not lab_item:
+        return []
+
+    # Find all task items for this lab
+    task_stmt = select(ItemRecord).where(
+        ItemRecord.parent_id == lab_item.id,
+        ItemRecord.type == "task",
+    ).order_by(ItemRecord.title)
+    task_result = await session.exec(task_stmt)
+    tasks = task_result.all()
+
+    result = []
+    for task in tasks:
+        # Get avg_score and attempts for this task
+        stats_stmt = select(
+            func.avg(InteractionLog.score).label("avg_score"),
+            func.count(InteractionLog.id).label("attempts"),
+        ).where(
+            InteractionLog.item_id == task.id,
+            InteractionLog.score.isnot(None),
+        )
+        stats_result = await session.exec(stats_stmt)
+        stats = stats_result.first()
+
+        avg_score = round(float(stats.avg_score), 1) if stats.avg_score is not None else 0.0
+        attempts = stats.attempts or 0
+
+        result.append({
+            "task": task.title,
+            "avg_score": avg_score,
+            "attempts": attempts,
+        })
+
+    return result
 
 
 @router.get("/timeline")
@@ -67,7 +182,51 @@ async def get_timeline(
       [{"date": "2026-02-28", "submissions": 45}, ...]
     - Order by date ascending
     """
-    raise NotImplementedError
+    # Parse lab-04 -> "Lab 04"
+    lab_num = lab.replace("lab-", "")
+    lab_title_pattern = f"Lab {lab_num}"
+
+    # Find the lab item
+    lab_stmt = select(ItemRecord).where(
+        ItemRecord.type == "lab",
+        ItemRecord.title.like(f"%{lab_title_pattern}%"),
+    )
+    lab_result = await session.exec(lab_stmt)
+    lab_item = lab_result.first()
+
+    if not lab_item:
+        return []
+
+    # Find all task items for this lab
+    task_stmt = select(ItemRecord.id).where(
+        ItemRecord.parent_id == lab_item.id,
+        ItemRecord.type == "task",
+    )
+    task_result = await session.exec(task_stmt)
+    task_ids = [row for row in task_result]
+
+    if not task_ids:
+        return []
+
+    # Group by date
+    stmt = select(
+        func.date(InteractionLog.created_at).label("date"),
+        func.count(InteractionLog.id).label("submissions"),
+    ).where(
+        InteractionLog.item_id.in_(task_ids),
+    ).group_by(
+        func.date(InteractionLog.created_at)
+    ).order_by(
+        func.date(InteractionLog.created_at)
+    )
+
+    result = await session.exec(stmt)
+    rows = result.all()
+
+    return [
+        {"date": str(row.date), "submissions": row.submissions}
+        for row in rows
+    ]
 
 
 @router.get("/groups")
@@ -87,4 +246,57 @@ async def get_groups(
       [{"group": "B23-CS-01", "avg_score": 78.5, "students": 25}, ...]
     - Order by group name
     """
-    raise NotImplementedError
+    # Parse lab-04 -> "Lab 04"
+    lab_num = lab.replace("lab-", "")
+    lab_title_pattern = f"Lab {lab_num}"
+
+    # Find the lab item
+    lab_stmt = select(ItemRecord).where(
+        ItemRecord.type == "lab",
+        ItemRecord.title.like(f"%{lab_title_pattern}%"),
+    )
+    lab_result = await session.exec(lab_stmt)
+    lab_item = lab_result.first()
+
+    if not lab_item:
+        return []
+
+    # Find all task items for this lab
+    task_stmt = select(ItemRecord.id).where(
+        ItemRecord.parent_id == lab_item.id,
+        ItemRecord.type == "task",
+    )
+    task_result = await session.exec(task_stmt)
+    task_ids = [row for row in task_result]
+
+    if not task_ids:
+        return []
+
+    # Join with learners and group by student_group
+    stmt = select(
+        Learner.student_group.label("group"),
+        func.avg(InteractionLog.score).label("avg_score"),
+        func.count(func.distinct(Learner.id)).label("students"),
+    ).join(
+        InteractionLog,
+        InteractionLog.learner_id == Learner.id,
+    ).where(
+        InteractionLog.item_id.in_(task_ids),
+        InteractionLog.score.isnot(None),
+    ).group_by(
+        Learner.student_group
+    ).order_by(
+        Learner.student_group
+    )
+
+    result = await session.exec(stmt)
+    rows = result.all()
+
+    return [
+        {
+            "group": row.group,
+            "avg_score": round(float(row.avg_score), 1) if row.avg_score is not None else 0.0,
+            "students": row.students,
+        }
+        for row in rows
+    ]
