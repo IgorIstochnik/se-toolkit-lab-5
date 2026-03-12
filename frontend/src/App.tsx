@@ -1,4 +1,5 @@
 import { useState, useEffect, useReducer, FormEvent } from 'react'
+import Dashboard from './Dashboard'
 import './App.css'
 
 const STORAGE_KEY = 'api_key'
@@ -95,6 +96,8 @@ function App() {
           Disconnect
         </button>
       </header>
+
+      <Dashboard />
 
       {fetchState.status === 'loading' && <p>Loading...</p>}
       {fetchState.status === 'error' && <p>Error: {fetchState.message}</p>}
